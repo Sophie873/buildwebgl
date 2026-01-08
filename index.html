@@ -107,7 +107,7 @@
         var safeData = {
           id: (raw.id || raw.twitter_id || "").toString(),
           username: (raw.username || raw.handle || "").toString(),
-          name: (raw.name || raw.username || "Player").toString()
+          name: (raw.username || raw.handle || "Player").toString() // [FIX] Use Handle as Name (Ignore DisplayName)
         };
 
         var jsonStr = JSON.stringify(safeData);
