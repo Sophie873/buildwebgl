@@ -98,7 +98,12 @@
         console.log("[Bridge] MODERN AUTH RECEIVED:", event.data.arg);
 
         // [FIX] Sanitize Data & Force Strict JSON Structure
-        var raw = event.data.arg || {};
+        var raw = event.data.arg;
+        if (typeof raw === 'string') {
+          try { raw = JSON.parse(raw); } catch (e) { console.warn("JSON Parse Output", e); }
+        }
+        raw = raw || {};
+
         var safeData = {
           id: (raw.id || raw.twitter_id || "").toString(),
           username: (raw.username || raw.handle || "").toString(),
