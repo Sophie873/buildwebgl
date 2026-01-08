@@ -7,11 +7,43 @@
   <title>Unity WebGL Player | adena-game-main-2022</title>
   <link rel="shortcut icon" href="TemplateData/favicon.ico">
   <link rel="stylesheet" href="TemplateData/style.css">
+  <style>
+    /* [FIX] Ensure the game fills the entire iframe without scrollbars */
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      /* Prevent ANY scrollbars */
+      background: #000;
+    }
+
+    #unity-container {
+      width: 100% !important;
+      height: 100% !important;
+      position: relative !important;
+      left: 0 !important;
+      top: 0 !important;
+      transform: none !important;
+    }
+
+    #unity-canvas {
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    #unity-footer {
+      display: none !important;
+      /* Hide footer to maximize game space */
+    }
+  </style>
 </head>
 
 <body>
-  <div id="unity-container" class="unity-desktop">
-    <canvas id="unity-canvas" width=960 height=600 tabindex="-1"></canvas>
+  <div id="unity-container">
+    <canvas id="unity-canvas" tabindex="-1"></canvas>
     <div id="unity-loading-bar">
       <div id="unity-logo"></div>
       <div id="unity-progress-bar-empty">
@@ -26,7 +58,6 @@
     </div>
   </div>
   <script>
-
     var container = document.querySelector("#unity-container");
     var canvas = document.querySelector("#unity-canvas");
     var loadingBar = document.querySelector("#unity-loading-bar");
@@ -34,12 +65,57 @@
     var fullscreenButton = document.querySelector("#unity-fullscreen-button");
     var warningBanner = document.querySelector("#unity-warning");
 
-    // Shows a temporary message banner/ribbon for a few seconds, or
-    // a permanent error message on top of the canvas if type=='error'.
-    // If type=='warning', a yellow highlight color is used.
-    // Modify or remove this function to customize the visually presented
-    // way that non-critical warnings and error messages are presented to the
-    // user.
+    // [BRIDGE] Dispatch event to the extension (Parent window)
+    window.dispatchReactUnityEvent = function (eventName) {
+      console.log("[Bridge] Dispatching signal to Parent Overlay:", eventName);
+      try {
+        var customEvent = new CustomEvent("ReactUnityEvent", {
+          detail: { eventName: eventName, data: arguments[1] || null }
+        });
+        window.dispatchEvent(customEvent);
+
+        var msgType = eventName.startsWith("On") ? eventName.substring(2) : eventName;
+
+        window.parent.postMessage({
+          type: msgType,
+          data: arguments[1] || null
+        }, "*");
+      } catch (e) {
+        console.warn("[Bridge] Signal dispatch failed", e);
+      }
+    };
+
+    // [BRIDGE] Receive events from Extension and relay to Unity Engine
+    window.addEventListener("message", function (event) {
+      if (!event.data || !window.unityInstance) return;
+
+      // [HYBRID FIX] Support both Old (AdenaAuthSuccess) and New (SetUserIdentity) protocols
+      if (event.data.type === "AdenaAuthSuccess") {
+        console.log("[Bridge] LEGACY AUTH RECEIVED:", event.data.userInfo);
+        window.unityInstance.SendMessage("WebGLConnection", "OnTwitterConnected", JSON.stringify(event.data.userInfo));
+      }
+      else if (event.data.type === "UNITY_EVENT" && event.data.eventName === "SetUserIdentity") {
+        console.log("[Bridge] MODERN AUTH RECEIVED:", event.data.arg);
+
+        // [FIX] Sanitize Data & Force Strict JSON Structure
+        var raw = event.data.arg || {};
+        var safeData = {
+          id: (raw.id || raw.twitter_id || "").toString(),
+          username: (raw.username || raw.handle || "").toString(),
+          name: (raw.name || raw.username || "Player").toString()
+        };
+
+        var jsonStr = JSON.stringify(safeData);
+        console.log("[Bridge] Sending Clean JSON:", jsonStr);
+
+        window.unityInstance.SendMessage("WebGLConnection", "OnTwitterConnected", jsonStr);
+      }
+      else if (event.data.type === "AdenaJoinServer") {
+        console.log("[Bridge] JOIN RECEIVED:", event.data.code);
+        window.unityInstance.SendMessage("WebGLConnection", "OnJoinServer", event.data.code);
+      }
+    });
+
     function unityShowBanner(msg, type) {
       function updateBannerVisibility() {
         warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
@@ -71,92 +147,9 @@
       showBanner: unityShowBanner,
     };
 
-    // By default, Unity keeps WebGL canvas render target size matched with
-    // the DOM size of the canvas element (scaled by window.devicePixelRatio)
-    // Set this to false if you want to decouple this synchronization from
-    // happening inside the engine, and you would instead like to size up
-    // the canvas DOM size and WebGL render target sizes yourself.
-    // config.matchWebGLToCanvasSize = false;
-
-    // If you would like all file writes inside Unity Application.persistentDataPath
-    // directory to automatically persist so that the contents are remembered when
-    // the user revisits the site the next time, uncomment the following line:
-    // config.autoSyncPersistentDataPath = true;
-    // This autosyncing is currently not the default behavior to avoid regressing
-    // existing user projects that might rely on the earlier manual
-    // JS_FileSystem_Sync() behavior, but in future Unity version, this will be
-    // expected to change.
-
-    if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-      // Mobile device style: fill the whole browser client area with the game canvas:
-
-      var meta = document.createElement('meta');
-      meta.name = 'viewport';
-      meta.content = 'width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes';
-      document.getElementsByTagName('head')[0].appendChild(meta);
-      container.className = "unity-mobile";
-      canvas.className = "unity-mobile";
-
-      // To lower canvas resolution on mobile devices to gain some
-      // performance, uncomment the following line:
-      // config.devicePixelRatio = 1;
-
-
-    } else {
-      // Desktop style: Render the game canvas in a window that can be maximized to fullscreen:
-
-      canvas.style.width = "960px";
-      canvas.style.height = "600px";
-    }
+    // [FIXED] Force 100% fit for both Mobile and Desktop
 
     loadingBar.style.display = "block";
-
-    // [BRIDGE] RESTORED FOR CONTENT.JS COMMUNICATION
-    window.dispatchReactUnityEvent = function (eventName, arg) {
-      try {
-        // Compatibility: Convert "OnUnityReady" -> "UnityReady" for Extension
-        var msgType = eventName;
-        if (eventName.startsWith("On")) msgType = eventName.substring(2);
-
-        console.log("[Bridge] Dispatching:", eventName, arg);
-        window.parent.postMessage({
-          type: msgType,
-          eventName: eventName,
-          arg: arg,
-          data: arg
-        }, "*");
-      } catch (e) {
-        console.error("[Bridge] Failed to dispatch:", e);
-      }
-    };
-
-    window.addEventListener("message", function (event) {
-      if (event.data && event.data.type === "UNITY_EVENT") {
-        console.log("[Bridge] Received:", event.data);
-        if (window.unityInstance) {
-          var arg = event.data.arg;
-          var evt = event.data.eventName;
-
-          // [FIX] Sanitization for Identity
-          if (evt === "SetUserIdentity") {
-            if (typeof arg === 'object') arg = JSON.stringify(arg);
-            // Map directly to legacy handler if needed, or generic
-            window.unityInstance.SendMessage("WebGLConnection", "OnTwitterConnected", arg);
-          }
-          else {
-            // Generic Fallback
-            // Ensure arg is string if expected? Unity generic SendMessage handles strings/ints/floats.
-            // Usually best to send string for complex data.
-            if (typeof arg === 'object') arg = JSON.stringify(arg);
-            try {
-              window.unityInstance.SendMessage("WebGLConnection", evt, arg);
-            } catch (err) {
-              console.warn("[Bridge] SendMessage error:", err);
-            }
-          }
-        }
-      }
-    });
 
     var script = document.createElement("script");
     script.src = loaderUrl;
@@ -164,9 +157,13 @@
       createUnityInstance(canvas, config, (progress) => {
         progressBarFull.style.width = 100 * progress + "%";
       }).then((unityInstance) => {
-        // [BRIDGE] EXPOSE INSTANCE
-        window.unityInstance = unityInstance;
         loadingBar.style.display = "none";
+        window.unityInstance = unityInstance;
+
+        // [CRITICAL] Synchronize with Extension immediately after loader completes
+        console.log("[Bridge] Unity Ready. Dispatching Handshake Signal...");
+        window.dispatchReactUnityEvent("OnUnityReady");
+
         fullscreenButton.onclick = () => {
           unityInstance.SetFullscreen(1);
         };
@@ -174,9 +171,7 @@
         alert(message);
       });
     };
-
     document.body.appendChild(script);
-
   </script>
 </body>
 
